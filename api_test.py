@@ -11,8 +11,10 @@ headers = {
     "X-Requested-With": "XMLHttpRequest"
 }
 
-# Daha önce gördüğümüz bildirimlerin ID'lerini hafızada tutacağımız küme
 gorulen_bildirimler = set()
+
+# Özel takip edilecek kritik konu başlıkları
+KRITIK_KONULAR = ["İhale Süreci / Sonucu", "Yeni İş İlişkisi"]
 
 def bildirimleri_getir():
     bugun = datetime.now().strftime("%d.%m.%Y")
@@ -35,9 +37,9 @@ def bildirimleri_getir():
 print("=" * 80)
 print("🛡️  KAP CANLI NÖBETÇİ BAŞLATILDI")
 print("🎯 Filtre: BIST Şirketleri | Özel Durum Açıklaması (ODA) | Devre Kesici Hariç")
+print(f"⭐ Kritik Radar: {', '.join(KRITIK_KONULAR)}")
 print("=" * 80)
 
-# 1. Aşama: İlk açılışta mevcut bildirimleri hafızaya al
 print("⏳ Mevcut güncel bildirimler taranıyor...")
 ilk_veri = bildirimleri_getir()
 
@@ -52,7 +54,6 @@ if ilk_veri:
 else:
     print("⚠️ Başlangıç verisi alınamadı, nöbete doğrudan başlanıyor...\n")
 
-# 2. Aşama: Sonsuz döngüde canlı takip
 kontrol_sayaci = 0
 
 try:
@@ -60,18 +61,15 @@ try:
         veriler = bildirimleri_getir()
         
         if veriler:
-            # En son gelen ilanlar genelde listenin başında olur, ters çevirip sırayla bakalım
             yeni_gelenler = []
             for ilan in veriler:
                 basic = ilan.get("disclosureBasic", {})
                 bildirim_id = basic.get("disclosureIndex")
                 
-                # Eğer daha önce görmediğimiz bir ID geldiyse
                 if bildirim_id and bildirim_id not in gorulen_bildirimler:
                     baslik = basic.get("title", "")
                     ozet = basic.get("summary", "")
                     
-                    # Filtre: Devre kesici ise hafızaya al ama ekrana basma
                     if "Devre Kesici" in baslik or "Devre Kesici" in ozet:
                         gorulen_bildirimler.add(bildirim_id)
                         continue
@@ -79,29 +77,40 @@ try:
                     yeni_gelenler.append((bildirim_id, basic))
                     gorulen_bildirimler.add(bildirim_id)
             
-            # Yeni düşen ilanları kronolojik sırayla ekrana yazdır
             for b_id, basic in reversed(yeni_gelenler):
                 sirket = basic.get("companyTitle", "Bilinmiyor")
                 hisse = basic.get("stockCodes") or basic.get("relatedStocks") or "-"
                 baslik = basic.get("title", "Başlık Yok")
+                ozet = basic.get("summary") or "Özet Bilgi Bulunmuyor"
                 tarih = basic.get("publishDate", "Tarih Yok")
                 saat = tarih.split()[-1] if ' ' in tarih else tarih
                 link = f"https://www.kap.org.tr/tr/Bildirim/{b_id}"
                 
-                print("\a") # Windows varsayılan "bip" uyarı sesi çalar
+                # 1. Adım: Yeni düşen her bildirimi standart şablonda bas
+                print("\a")
                 print(f"🚨 [YENİ BİLDİRİM DÜŞTÜ!] Saat: {saat}")
                 print(f"📌 {hisse} | {sirket}")
                 print(f"   Konu : {baslik}")
+                print(f"   Özet : {ozet}")
                 print(f"   Link : {link}")
                 print("-" * 80)
+                
+                # 2. Adım: Konu kritik başlıklardan birini içeriyor mu kontrol et
+                aranan_mi = any(hedef.lower() in baslik.lower() for hedef in KRITIK_KONULAR)
+                if aranan_mi:
+                    print("\a\a\a")  # Dikkat çekmek için 3 kez bip sesi
+                    print("=" * 80)
+                    print("🔥 [ARANAN İLAN YAKALANDI!]")
+                    print(f"🎯 HEDEF : {baslik.upper()}")
+                    print(f"🏢 ŞİRKET: {hisse} - {sirket}")
+                    print(f"🔗 LİNK  : {link}")
+                    print("=" * 80)
         
         kontrol_sayaci += 1
-        # Her 1 dakikada bir (yaklaşık 6 kontrolde bir) ekranda nöbetçinin çalıştığını teyit eden ufak işaret
         if kontrol_sayaci % 6 == 0:
             su_an = datetime.now().strftime("%H:%M:%S")
             print(f"[{su_an}] Nöbetçi aktif... Sistem taranıyor...")
 
-        # Sunucuyu yormamak ve banlanmamak için 10 saniye bekle
         time.sleep(10)
 
 except KeyboardInterrupt:
