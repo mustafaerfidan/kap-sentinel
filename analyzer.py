@@ -148,6 +148,8 @@ def ilani_analiz_et(bildirim_linki, hisse_kodu=None):
     }
 
 if __name__ == "__main__":
-    # Test linki (Hisse kodu vermene gerek yok, kendisi bulur)
-    test_linki = "https://www.kap.org.tr/tr/Bildirim/1660591"
-    ilani_analiz_et(test_linki)
+    # Manuel test modülü: Link girilmezse varsayılan test linkiyle çalışır
+    girilen_link = input("Test edilecek KAP linkini girin (Boş bırakılırsa MARBL test edilir): ").strip()
+    if not girilen_link:
+        girilen_link = "https://www.kap.org.tr/tr/Bildirim/1661736"
+    ilani_analiz_et(girilen_link)

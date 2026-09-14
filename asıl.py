@@ -1,7 +1,6 @@
 import requests
 import time
 from datetime import datetime
-from bs4 import BeautifulSoup
 from analyzer import ilani_analiz_et
 
 url = "https://www.kap.org.tr/tr/api/disclosure/list/main"
@@ -32,71 +31,15 @@ def tr_kucult(metin):
         temiz = temiz.replace(buyuk, kucuk)
     return temiz.lower()
 
-def bildirim_turu_belirle(baslik, ozet=""):
+def bildirim_turu_belirle(baslik, ozet):
     """Metni inceleyip ilanın türünü ayrıştırır."""
     metin = tr_kucult(f"{baslik} {ozet}")
     
     if "yeni is iliskisi" in metin:
         return "YENI_IS"
-    elif "ihale sureci / sonucu" in metin or "ihale sureci/sonucu" in metin or "ihale" in metin:
+    elif "ihale sureci / sonucu" in metin or "ihale sureci/sonucu" in metin:
         return "IHALE"
     return None
-
-def manuel_linki_tara_ve_isle(test_url):
-    """Girilen linkin sayfasına gidip türünü, hissesini ve özetini nöbetçi gibi yakalar."""
-    bildirim_id = test_url.rstrip("/").split("/")[-1]
-    print(f"\n🔍 [RADAR SİMÜLASYONU] İlan taranıyor: {test_url}")
-
-    sayfa_url = f"https://www.kap.org.tr/tr/Bildirim/{bildirim_id}"
-    try:
-        cevap = requests.get(sayfa_url, headers=headers, timeout=10)
-        if cevap.status_code != 200:
-            print(f"❌ Sayfaya ulaşılamadı. Kod: {cevap.status_code}")
-            return
-    except Exception as e:
-        print(f"❌ Bağlantı hatası: {e}")
-        return
-
-    soup = BeautifulSoup(cevap.text, "html.parser")
-    tam_metin = soup.get_text(separator=" ", strip=True)
-
-    # 1. Hisse kodunu yakala
-    hisse_kodu = None
-    kod_kutusu = soup.find("div", class_=lambda c: c and "lg:text-[23px]" in c and "font-semibold" in c)
-    if kod_kutusu:
-        hisse_kodu = kod_kutusu.get_text(strip=True).upper()
-
-    # 2. Bildirim başlığı ve özetini sayfadan yakala
-    baslik = "Bilinmiyor"
-    for sec in ["Yeni İş İlişkisi", "İhale Süreci / Sonucu", "Özel Durum Açıklaması"]:
-        if sec.lower() in tam_metin.lower():
-            baslik = sec
-            break
-
-    tur = bildirim_turu_belirle(tam_metin)
-    su_an = datetime.now().strftime("%H:%M:%S")
-
-    # 3. Tespit edilen türe göre nöbetçi akışını çalıştır
-    if tur == "YENI_IS":
-        print("\a\a")
-        print("\n" + "#" * 80)
-        print(f"💼 [YENİ İŞ İLİŞKİSİ BULUNDU] Saat: {su_an} | Şirket: {hisse_kodu or 'Tespit Ediliyor'}")
-        print(f"🚀 Link analiz motoruna gönderildi: {test_url}")
-        print("#" * 80)
-        ilani_analiz_et(test_url, hisse_kodu=hisse_kodu)
-
-    elif tur == "IHALE":
-        print("\a\a\a")
-        print("\n" + "=" * 80)
-        print("🏆 [İHALE SONUCU BİLDİRİMİ YAKALANDI!]")
-        print(f"🏢 Şirket : {hisse_kodu or 'Bilinmiyor'}")
-        print(f"📅 Saat   : {su_an}")
-        print(f"📌 Konu   : İhale Süreci / Sonucu")
-        print(f"🔗 Link   : {test_url}")
-        print("=" * 80 + "\n")
-
-    else:
-        print(f"ℹ️ Bildirim incelendi ancak aranan kritik başlıklara (Yeni İş / İhale) uymuyor.")
 
 def bildirimleri_getir():
     bugun = datetime.now().strftime("%d.%m.%Y")
@@ -121,14 +64,6 @@ print("🛡️  KAP CANLI NÖBETÇİ BAŞLATILDI")
 print("🎯 Hedef 1: Yeni İş İlişkisi -> Doğrudan analyzer.py motoruna aktarılır")
 print("🎯 Hedef 2: İhale Süreci / Sonucu -> Ekrana detaylı kart ve link basılır")
 print("=" * 80)
-
-# =====================================================================
-# SİMÜLASYON TEST GİRİŞİ
-# =====================================================================
-test_linki = input("\n🧪 Test etmek istediğiniz bir KAP bildirim linki var mı? (Yoksa Enter'a basıp geçin): ").strip()
-if test_linki:
-    manuel_linki_tara_ve_isle(test_linki)
-    print("\n✅ Simülasyon tamamlandı. Şimdi canlı nöbete geçiliyor...\n" + "-" * 80)
 
 print("⏳ Güncel bildirimler taranıyor...")
 ilk_veri = bildirimleri_getir()
@@ -180,6 +115,7 @@ try:
                 
                 tur = bildirim_turu_belirle(baslik, ozet)
                 
+                # Durum 1: Yeni İş İlişkisi -> Analiz motoruna sevk et
                 if tur == "YENI_IS":
                     print("\a\a")
                     print("\n" + "#" * 80)
@@ -190,6 +126,7 @@ try:
                     hisse_temiz = hisse.split(",")[0].strip() if hisse != "-" else None
                     ilani_analiz_et(link, hisse_kodu=hisse_temiz)
 
+                # Durum 2: İhale Süreci / Sonucu -> Detaylı ihale kartını ekrana bas
                 elif tur == "IHALE":
                     print("\a\a\a")
                     print("\n" + "=" * 80)
@@ -201,6 +138,7 @@ try:
                     print(f"🔗 Link   : {link}")
                     print("=" * 80 + "\n")
 
+                # Diğer genel bildirimler (Akış kaydı)
                 else:
                     print(f"ℹ️ [AKIS] {saat} | {hisse} | {baslik}")
 
