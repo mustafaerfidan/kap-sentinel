@@ -1,5 +1,6 @@
 import requests
 import time
+import traceback
 from datetime import datetime
 from bs4 import BeautifulSoup
 from analyzer import ilani_analiz_et, telegram_bildirim_gonder
@@ -129,8 +130,10 @@ if ilk_veri:
             gorulen_bildirimler.add(b_id)
     print(f"✅ Başlangıç tamamlandı. Hafızadaki mevcut ilan sayısı: {len(gorulen_bildirimler)}")
     print("👀 Canlı nöbet başladı, yeni bildirim bekleniyor... (Durdurmak için: Ctrl + C)\n")
+    telegram_bildirim_gonder(f"🚀 <b>KAP Nöbetçisi Başlatıldı!</b>\n\nSistem devrede, <code>{len(gorulen_bildirimler)}</code> adet mevcut ilan hafızaya alındı. Canlı nöbet başladı.")
 else:
     print("⚠️ Başlangıç verisi alınamadı, nöbete başlanıyor...\n")
+    telegram_bildirim_gonder("⚠️ <b>KAP Nöbetçisi Başlatıldı</b> ancak başlangıç verisi çekilemedi. Nöbete yine de devam ediliyor.")
 
 kontrol_sayaci = 0
 
@@ -201,3 +204,18 @@ try:
 
 except KeyboardInterrupt:
     print("\n🛑 Canlı nöbetçi durduruldu.")
+    telegram_bildirim_gonder("🛑 <b>KAP Nöbetçisi manuel olarak durduruldu.</b>")
+
+except Exception as e:
+    hata_detay = traceback.format_exc()
+    print(f"\n❌ BEKLENMEDİK ÇÖKME:\n{hata_detay}")
+    
+    # Telegram mesaj uzunluğu sınırına takılmamak için son kısmı alıyoruz
+    hata_kisa = hata_detay[-800:] if len(hata_detay) > 800 else hata_detay
+    mesaj = (
+        f"🚨 <b>KAP NÖBETÇİSİ ÇÖKTÜ!</b>\n\n"
+        f"<b>Hata Türü:</b> <code>{type(e).__name__}</code>\n"
+        f"<b>Detay:</b>\n<pre>{hata_kisa}</pre>\n\n"
+        f"⚠️ <i>Lütfen sunucuya bağlanıp botu kontrol edin.</i>"
+    )
+    telegram_bildirim_gonder(mesaj)
