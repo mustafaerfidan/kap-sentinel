@@ -1,5 +1,17 @@
-__pycache__/
-*.pyc
+# Gizli anahtarlar ve ortam değişkenleri
 .env
+
+# Sanal ortamlar
+kap_env/
 venv/
+env/
+
+# Python derleme ve önbellek dosyaları
+__pycache__/
+*.py[cod]
+
+# Log dosyaları
+*.log
+
+# IDE ayarları
 .vscode/

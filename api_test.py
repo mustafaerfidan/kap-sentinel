@@ -2,7 +2,7 @@ import requests
 import time
 from datetime import datetime
 from bs4 import BeautifulSoup
-from analyzer import ilani_analiz_et
+from analyzer import ilani_analiz_et, telegram_bildirim_gonder
 
 url = "https://www.kap.org.tr/tr/api/disclosure/list/main"
 
@@ -16,7 +16,6 @@ headers = {
 gorulen_bildirimler = set()
 
 def tr_kucult(metin):
-    """Türkçe karakter ve harf büyüklüğü farklarını sıfırlar."""
     if not metin:
         return ""
     donusum = {
@@ -33,9 +32,7 @@ def tr_kucult(metin):
     return temiz.lower()
 
 def bildirim_turu_belirle(baslik, ozet=""):
-    """Metni inceleyip ilanın türünü ayrıştırır."""
     metin = tr_kucult(f"{baslik} {ozet}")
-    
     if "yeni is iliskisi" in metin:
         return "YENI_IS"
     elif "ihale sureci / sonucu" in metin or "ihale sureci/sonucu" in metin or "ihale" in metin:
@@ -43,7 +40,6 @@ def bildirim_turu_belirle(baslik, ozet=""):
     return None
 
 def manuel_linki_tara_ve_isle(test_url):
-    """Girilen linkin sayfasına gidip türünü, hissesini ve özetini nöbetçi gibi yakalar."""
     bildirim_id = test_url.rstrip("/").split("/")[-1]
     print(f"\n🔍 [RADAR SİMÜLASYONU] İlan taranıyor: {test_url}")
 
@@ -60,23 +56,14 @@ def manuel_linki_tara_ve_isle(test_url):
     soup = BeautifulSoup(cevap.text, "html.parser")
     tam_metin = soup.get_text(separator=" ", strip=True)
 
-    # 1. Hisse kodunu yakala
     hisse_kodu = None
     kod_kutusu = soup.find("div", class_=lambda c: c and "lg:text-[23px]" in c and "font-semibold" in c)
     if kod_kutusu:
         hisse_kodu = kod_kutusu.get_text(strip=True).upper()
 
-    # 2. Bildirim başlığı ve özetini sayfadan yakala
-    baslik = "Bilinmiyor"
-    for sec in ["Yeni İş İlişkisi", "İhale Süreci / Sonucu", "Özel Durum Açıklaması"]:
-        if sec.lower() in tam_metin.lower():
-            baslik = sec
-            break
-
     tur = bildirim_turu_belirle(tam_metin)
     su_an = datetime.now().strftime("%H:%M:%S")
 
-    # 3. Tespit edilen türe göre nöbetçi akışını çalıştır
     if tur == "YENI_IS":
         print("\a\a")
         print("\n" + "#" * 80)
@@ -94,9 +81,16 @@ def manuel_linki_tara_ve_isle(test_url):
         print(f"📌 Konu   : İhale Süreci / Sonucu")
         print(f"🔗 Link   : {test_url}")
         print("=" * 80 + "\n")
-
+        
+        # Telegram Bildirimi
+        tg_ihale = f"🏆 <b>İHALE BİLDİRİMİ YAKALANDI!</b>\n\n"
+        tg_ihale += f"🏢 <b>Şirket:</b> #{hisse_kodu or 'Bilinmiyor'}\n"
+        tg_ihale += f"⏰ <b>Saat:</b> {su_an}\n"
+        tg_ihale += f"📌 <b>Konu:</b> İhale Süreci / Sonucu\n\n"
+        tg_ihale += f"🔗 <a href='{test_url}'>İhale Detayına Git</a>"
+        telegram_bildirim_gonder(tg_ihale)
     else:
-        print(f"ℹ️ Bildirim incelendi ancak aranan kritik başlıklara (Yeni İş / İhale) uymuyor.")
+        print("ℹ️ Bildirim incelendi ancak hedeflenen kritik başlıklara uymuyor.")
 
 def bildirimleri_getir():
     bugun = datetime.now().strftime("%d.%m.%Y")
@@ -107,7 +101,6 @@ def bildirimleri_getir():
         "memberTypes": ["IGS"],
         "mkkMemberOid": None
     }
-    
     try:
         cevap = requests.post(url, json=payload, headers=headers, timeout=10)
         if cevap.status_code == 200:
@@ -117,18 +110,13 @@ def bildirimleri_getir():
     return None
 
 print("=" * 80)
-print("🛡️  KAP CANLI NÖBETÇİ BAŞLATILDI")
-print("🎯 Hedef 1: Yeni İş İlişkisi -> Doğrudan analyzer.py motoruna aktarılır")
-print("🎯 Hedef 2: İhale Süreci / Sonucu -> Ekrana detaylı kart ve link basılır")
+print("🛡️  KAP CANLI NÖBETÇİ BAŞLATILDI (TELEGRAM ENTEGRELİ)")
 print("=" * 80)
 
-# =====================================================================
-# SİMÜLASYON TEST GİRİŞİ
-# =====================================================================
-test_linki = input("\n🧪 Test etmek istediğiniz bir KAP bildirim linki var mı? (Yoksa Enter'a basıp geçin): ").strip()
+test_linki = input("\n🧪 Test etmek istediğiniz bir KAP linki var mı? (Yoksa Enter'a basıp geçin): ").strip()
 if test_linki:
     manuel_linki_tara_ve_isle(test_linki)
-    print("\n✅ Simülasyon tamamlandı. Şimdi canlı nöbete geçiliyor...\n" + "-" * 80)
+    print("\n✅ Simülasyon tamamlandı. Canlı nöbete geçiliyor...\n" + "-" * 80)
 
 print("⏳ Güncel bildirimler taranıyor...")
 ilk_veri = bildirimleri_getir()
@@ -136,9 +124,9 @@ ilk_veri = bildirimleri_getir()
 if ilk_veri:
     for ilan in ilk_veri:
         basic = ilan.get("disclosureBasic", {})
-        bildirim_id = basic.get("disclosureIndex")
-        if bildirim_id:
-            gorulen_bildirimler.add(bildirim_id)
+        b_id = basic.get("disclosureIndex")
+        if b_id:
+            gorulen_bildirimler.add(b_id)
     print(f"✅ Başlangıç tamamlandı. Hafızadaki mevcut ilan sayısı: {len(gorulen_bildirimler)}")
     print("👀 Canlı nöbet başladı, yeni bildirim bekleniyor... (Durdurmak için: Ctrl + C)\n")
 else:
@@ -149,26 +137,22 @@ kontrol_sayaci = 0
 try:
     while True:
         veriler = bildirimleri_getir()
-        
         if veriler:
             yeni_gelenler = []
             for ilan in veriler:
                 basic = ilan.get("disclosureBasic", {})
-                bildirim_id = basic.get("disclosureIndex")
-                
-                if bildirim_id and bildirim_id not in gorulen_bildirimler:
+                b_id = basic.get("disclosureIndex")
+                if b_id and b_id not in gorulen_bildirimler:
                     baslik = basic.get("title", "")
                     ozet = basic.get("summary", "")
-                    
                     temiz_baslik = tr_kucult(baslik)
                     temiz_ozet = tr_kucult(ozet)
                     if "devre kesici" in temiz_baslik or "devre kesici" in temiz_ozet:
-                        gorulen_bildirimler.add(bildirim_id)
+                        gorulen_bildirimler.add(b_id)
                         continue
-                    
-                    yeni_gelenler.append((bildirim_id, basic))
-                    gorulen_bildirimler.add(bildirim_id)
-            
+                    yeni_gelenler.append((b_id, basic))
+                    gorulen_bildirimler.add(b_id)
+
             for b_id, basic in reversed(yeni_gelenler):
                 sirket = basic.get("companyTitle", "Bilinmiyor")
                 hisse = basic.get("stockCodes") or basic.get("relatedStocks") or "-"
@@ -179,19 +163,15 @@ try:
                 link = f"https://www.kap.org.tr/tr/Bildirim/{b_id}"
                 
                 tur = bildirim_turu_belirle(baslik, ozet)
-                
                 if tur == "YENI_IS":
-                    print("\a\a")
                     print("\n" + "#" * 80)
                     print(f"💼 [YENİ İŞ İLİŞKİSİ BULUNDU] Saat: {saat} | Şirket: {hisse} - {sirket}")
                     print(f"🚀 Link analiz motoruna gönderildi: {link}")
                     print("#" * 80)
-                    
                     hisse_temiz = hisse.split(",")[0].strip() if hisse != "-" else None
                     ilani_analiz_et(link, hisse_kodu=hisse_temiz)
 
                 elif tur == "IHALE":
-                    print("\a\a\a")
                     print("\n" + "=" * 80)
                     print("🏆 [İHALE SONUCU BİLDİRİMİ YAKALANDI!]")
                     print(f"🏢 Şirket : {hisse} ({sirket})")
@@ -200,16 +180,24 @@ try:
                     print(f"📝 Özet   : {ozet}")
                     print(f"🔗 Link   : {link}")
                     print("=" * 80 + "\n")
-
+                    
+                    # Telegram Bildirimi
+                    tg_ihale = f"🏆 <b>İHALE BİLDİRİMİ YAKALANDI!</b>\n\n"
+                    tg_ihale += f"🏢 <b>Şirket:</b> #{hisse}\n"
+                    tg_ihale += f"⏰ <b>Saat:</b> {saat}\n"
+                    tg_ihale += f"📌 <b>Başlık:</b> {baslik}\n"
+                    tg_ihale += f"📝 <b>Özet:</b> {ozet}\n\n"
+                    tg_ihale += f"🔗 <a href='{link}'>İhale Detayına Git</a>"
+                    telegram_bildirim_gonder(tg_ihale)
                 else:
                     print(f"ℹ️ [AKIS] {saat} | {hisse} | {baslik}")
 
         kontrol_sayaci += 1
-        if kontrol_sayaci % 6 == 0:
+        if kontrol_sayaci % 5 == 0:
             su_an = datetime.now().strftime("%H:%M:%S")
             print(f"[{su_an}] Nöbetçi aktif... Sistem taranıyor...")
 
-        time.sleep(10)
+        time.sleep(12)
 
 except KeyboardInterrupt:
     print("\n🛑 Canlı nöbetçi durduruldu.")

@@ -1,155 +1,132 @@
+import os
+import re
 import requests
 from bs4 import BeautifulSoup
-import re
 import yfinance as yf
+from dotenv import load_dotenv
 
-def canli_kurlari_al():
-    """Piyasa kurunu Yahoo Finance üzerinden alır; hata durumunda yedek kur döner."""
+# .env dosyasındaki değişkenleri yükler
+load_dotenv()
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
+def telegram_bildirim_gonder(mesaj_metni):
+    """Telegram üzerinden formatlı mesaj gönderir."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Telegram token veya Chat ID bulunamadı (.env kontrol edin).")
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": mesaj_metni,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": False
+    }
     try:
-        usd = yf.Ticker("USDTRY=X").fast_info.last_price
-        eur = yf.Ticker("EURTRY=X").fast_info.last_price
-        return float(usd), float(eur)
-    except Exception:
-        return 48.55, 56.32
+        requests.post(url, json=payload, timeout=8)
+    except Exception as e:
+        print(f"❌ Telegram gönderim hatası: {e}")
 
-def sirket_ozkaynak_al(hisse_kodu):
-    """BIST hissesinin son bilançosundaki Özkaynak tutarını çeker."""
+def canli_kur_al(para_birimi):
+    pb = para_birimi.upper().strip()
+    if pb in ["TL", "TRY"]:
+        return 1.0
+    parite = f"{pb}TRY=X"
+    try:
+        fiyat = yf.Ticker(parite).fast_info.last_price
+        if fiyat:
+            return round(fiyat, 4)
+    except Exception:
+        pass
+    varsayilanlar = {"USD": 34.0, "EUR": 37.5}
+    return varsayilanlar.get(pb, 1.0)
+
+def ozsermaye_al(hisse_kodu):
     if not hisse_kodu:
         return None
-    temiz_kod = hisse_kodu.strip().split(",")[0].replace(".IS", "").upper()
-    sembol = f"{temiz_kod}.IS"
-    
     try:
-        ticker = yf.Ticker(sembol)
-        bilanco = ticker.balance_sheet
-        if not bilanco.empty:
-            for alan in ["Total Equity Gross Minority Interest", "Stockholders Equity", "Common Stock Equity"]:
-                if alan in bilanco.index:
-                    return float(bilanco.loc[alan].iloc[0])
-        # Alternatif bakiye kontrolü
-        info = ticker.info
-        if "totalStockholderEquity" in info and info["totalStockholderEquity"]:
-            return float(info["totalStockholderEquity"])
-    except Exception as e:
-        print(f"⚠️ Öz sermaye hatası ({sembol}): {e}")
+        sembol = f"{hisse_kodu.upper().strip()}.IS"
+        bilanço = yf.Ticker(sembol).balance_sheet
+        if bilanço is not None and not bilanço.empty:
+            for etiket in ["Stockholders Equity", "Common Stock Equity", "Total Equity Gross Minority Interest"]:
+                if etiket in bilanço.index:
+                    deger = bilanço.loc[etiket].iloc[0]
+                    if deger and deger > 0:
+                        return float(deger)
+    except Exception:
+        pass
     return None
 
-def ilani_analiz_et(bildirim_linki, hisse_kodu=None):
-    bildirim_id = bildirim_linki.rstrip("/").split("/")[-1]
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    }
-
-    sayfa_url = f"https://www.kap.org.tr/tr/Bildirim/{bildirim_id}"
+def ilani_analiz_et(link, hisse_kodu=None):
     try:
-        cevap = requests.get(sayfa_url, headers=headers, timeout=10)
-        if cevap.status_code != 200:
-            print(f"❌ Sayfa verisi alınamadı. HTTP Kod: {cevap.status_code}")
-            return None
+        r = requests.get(link, headers=headers, timeout=10)
+        soup = BeautifulSoup(r.text, "html.parser")
     except Exception as e:
-        print(f"❌ Bağlantı hatası: {e}")
-        return None
+        print(f"❌ Sayfa çekilemedi: {e}")
+        return
 
-    soup = BeautifulSoup(cevap.text, "html.parser")
-
-    # 1. Aşama: Şirket Kodunu Dinamik Yakalama (Doğrulanan Yöntem)
     if not hisse_kodu:
         kod_kutusu = soup.find("div", class_=lambda c: c and "lg:text-[23px]" in c and "font-semibold" in c)
         if kod_kutusu:
             hisse_kodu = kod_kutusu.get_text(strip=True).upper()
-        else:
-            for d in soup.find_all("div", class_=lambda c: c and "font-semibold" in c):
-                metin = d.get_text(strip=True)
-                if 3 <= len(metin) <= 5 and metin.isupper():
-                    hisse_kodu = metin
-                    break
 
-    tam_metin = soup.get_text(separator=" ", strip=True)
+    metin = soup.get_text(separator=" ", strip=True)
+    
+    tutar_desen = re.search(r"([\d\.,]+)\s*(TL|USD|EUR|TRY)", metin, re.IGNORECASE)
+    tutar_tl = None
+    ham_tutar = None
+    pb = "TL"
 
-    def metni_sayiya_cevir(deger_str):
-        if not deger_str:
-            return None
-        temiz = deger_str.replace(".", "").replace(",", ".")
+    if tutar_desen:
+        ham_str = tutar_desen.group(1).replace(".", "").replace(",", ".")
+        pb = tutar_desen.group(2).upper()
         try:
-            return float(temiz)
+            ham_tutar = float(ham_str)
+            kur = canli_kur_al(pb)
+            tutar_tl = ham_tutar * kur
         except ValueError:
-            return None
+            pass
 
-    # 2. Aşama: Ham Değerleri Yakalama
-    usd_match = re.search(r"([\d\.,]+)\s*(?:ABD Doları|USD|\$)", tam_metin, re.IGNORECASE)
-    eur_match = re.search(r"([\d\.,]+)\s*(?:Avro|Euro|EUR|€)", tam_metin, re.IGNORECASE)
-    tl_match = re.search(r"([\d\.,]+)\s*(?:TL|Türk Lirası)", tam_metin, re.IGNORECASE)
-    oran_match = re.search(r"%\s*([\d\.,]+)", tam_metin)
-
-    ham_usd = metni_sayiya_cevir(usd_match.group(1)) if usd_match else None
-    ham_eur = metni_sayiya_cevir(eur_match.group(1)) if eur_match else None
-    ham_tl = metni_sayiya_cevir(tl_match.group(1)) if tl_match else None
-    ciro_orani = metni_sayiya_cevir(oran_match.group(1)) if oran_match else None
-
-    # 3. Aşama: Canlı Kurlar ve Dönüşüm
-    usd_kuru, eur_kuru = canli_kurlari_al()
-    nihai_tl_tutar = 0.0
-    hesaplama_detayi = "Bilinmiyor"
-
-    if ham_tl:
-        nihai_tl_tutar = ham_tl
-        hesaplama_detayi = "Doğrudan İlandaki TL Değeri Kullanıldı"
-    elif ham_usd:
-        nihai_tl_tutar = ham_usd * usd_kuru
-        hesaplama_detayi = f"USD -> TL Çevrildi ({ham_usd:,.2f} USD × {usd_kuru:.2f} ₺)"
-    elif ham_eur:
-        nihai_tl_tutar = ham_eur * eur_kuru
-        hesaplama_detayi = f"EUR -> TL Çevrildi ({ham_eur:,.2f} EUR × {eur_kuru:.2f} ₺)"
-
-    # 4. Aşama: Öz Sermaye Kıyaslaması
-    oz_sermaye = sirket_ozkaynak_al(hisse_kodu)
-
-    print("\n" + "=" * 70)
-    print(f"📌 Bildirim ID          : {bildirim_id}")
-    print(f"🏢 Tespit Edilen Hisse  : {hisse_kodu}")
-    print("-" * 70)
-    print(f"💱 Güncel Piyasa Kuru   : USD = {usd_kuru:.2f} ₺ | EUR = {eur_kuru:.2f} ₺")
-    print("-" * 70)
-    print("📖 İLANDAN OKUNAN HAM DEĞERLER:")
-    print(f"   • Ham USD Tutarı     : {ham_usd:,.2f} USD" if ham_usd else "   • Ham USD Tutarı     : -")
-    print(f"   • Ham EUR Tutarı     : {ham_eur:,.2f} EUR" if ham_eur else "   • Ham EUR Tutarı     : -")
-    print(f"   • Ham TL Tutarı      : {ham_tl:,.2f} TL" if ham_tl else "   • Ham TL Tutarı      : -")
-    print(f"   • İlandaki Ciro Oranı: %{ciro_orani}" if ciro_orani else "   • İlandaki Ciro Oranı: -")
-    print("-" * 70)
-    print(f"🎯 NİHAİ TL TUTARI      : {nihai_tl_tutar:,.2f} TL")
-    print(f"⚙️  Hesaplama Yöntemi    : {hesaplama_detayi}")
-    print("-" * 70)
-
-    if oz_sermaye:
-        oran = (nihai_tl_tutar / oz_sermaye) * 100
-        print(f"🏛️ Şirket Öz Sermayesi  : {oz_sermaye:,.2f} TL")
-        print(f"📊 Oran (İş / Özser)    : %{oran:.2f}")
-        print("-" * 70)
-        if nihai_tl_tutar > oz_sermaye:
-            print("🚨 KARAR: [ÖZ SERMAYEDEN BÜYÜK!] (Şirket ölçeğini aşan dev anlaşma)")
-        else:
-            print("ℹ️ KARAR: [Öz sermayeden büyük değil]")
+    # Terminal Kartı
+    print("\n" + "=" * 60)
+    print(f"📊 [FİNANSAL ANALİZ KARTI]")
+    print(f"🏢 Hisse Kodu : {hisse_kodu or 'Bilinmiyor'}")
+    if ham_tutar:
+        print(f"💰 İş Tutarı  : {ham_tutar:,.2f} {pb} (Yaklaşık {tutar_tl:,.2f} TL)")
     else:
-        print("⚠️ Şirketin bilanço verisi Yahoo Finance üzerinden çekilemedi.")
+        print("💰 İş Tutarı  : İlan metninde net rakam ayrıştırılamadı.")
 
-    print("=" * 70 + "\n")
+    ozsermaye = ozsermaye_al(hisse_kodu) if hisse_kodu else None
+    oran = None
+    if ozsermaye and tutar_tl:
+        oran = (tutar_tl / ozsermaye) * 100
+        print(f"🏛️ Öz Sermaye : {ozsermaye:,.2f} TL")
+        print(f"📈 Sözleşme / Öz Sermaye Oranı: %{oran:.2f}")
+        if oran >= 50:
+            print("🚨 [DİKKAT: Sözleşme bedeli şirketin öz sermayesinin %50'sinden büyük!]")
+    elif ozsermaye:
+        print(f"🏛️ Öz Sermaye : {ozsermaye:,.2f} TL")
 
-    return {
-        "hisse": hisse_kodu,
-        "ham_usd": ham_usd,
-        "ham_eur": ham_eur,
-        "ham_tl": ham_tl,
-        "usd_kuru": usd_kuru,
-        "nihai_tl": nihai_tl_tutar,
-        "oz_sermaye": oz_sermaye,
-        "buyuk_mu": (nihai_tl_tutar > oz_sermaye) if oz_sermaye else False
-    }
+    print(f"🔗 Bildirim   : {link}")
+    print("=" * 60 + "\n")
 
-if __name__ == "__main__":
-    # Manuel test modülü: Link girilmezse varsayılan test linkiyle çalışır
-    girilen_link = input("Test edilecek KAP linkini girin (Boş bırakılırsa MARBL test edilir): ").strip()
-    if not girilen_link:
-        girilen_link = "https://www.kap.org.tr/tr/Bildirim/1661736"
-    ilani_analiz_et(girilen_link)
+    # Telegram Mesajı
+    tg_mesaj = f"💼 <b>YENİ İŞ İLİŞKİSİ BİLDİRİMİ</b>\n\n"
+    tg_mesaj += f"🏢 <b>Hisse:</b> #{hisse_kodu or 'Bilinmiyor'}\n"
+    if ham_tutar:
+        tg_mesaj += f"💰 <b>İş Tutarı:</b> {ham_tutar:,.2f} {pb} (~{tutar_tl:,.2f} TL)\n"
+    if ozsermaye:
+        tg_mesaj += f"🏛️ <b>Öz Sermaye:</b> {ozsermaye:,.2f} TL\n"
+    if oran:
+        tg_mesaj += f"📈 <b>İş / Öz Sermaye:</b> %{oran:.2f}\n"
+        if oran >= 50:
+            tg_mesaj += f"\n🚨 <b>DİKKAT: İş tutarı öz sermayenin %50'sinden büyük!</b>\n"
+    
+    tg_mesaj += f"\n🔗 <a href='{link}'>KAP İlanını Görüntüle</a>"
+    telegram_bildirim_gonder(tg_mesaj)
