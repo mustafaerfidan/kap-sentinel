@@ -1,7 +1,7 @@
 import requests
 
-token = "8703249842:AAFglF867yO_upDCybOQdzKrnp94WuHay-c"
-chat_id = "8906444117"
+token = " "
+chat_id = " "
 
 url = f"https://api.telegram.org/bot{token}/sendMessage"
 payload = {
