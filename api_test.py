@@ -32,12 +32,15 @@ def tr_kucult(metin):
         temiz = temiz.replace(buyuk, kucuk)
     return temiz.lower()
 
-def bildirim_turu_belirle(baslik, ozet=""):
-    metin = tr_kucult(f"{baslik} {ozet}")
-    if "yeni is iliskisi" in metin:
+def bildirim_turu_belirle(baslik):
+    # Sadece ve sadece resmi başlık/konu alanına bakar, serbest özet metnini yok sayar
+    temiz_baslik = tr_kucult(baslik)
+    
+    if "yeni is iliskisi" in temiz_baslik:
         return "YENI_IS"
-    elif "ihale sureci / sonucu" in metin or "ihale sureci/sonucu" in metin or "ihale" in metin:
+    elif "ihale sureci / sonucu" in temiz_baslik or "ihale sureci/sonucu" in temiz_baslik:
         return "IHALE"
+        
     return None
 
 def manuel_linki_tara_ve_isle(test_url):
@@ -147,10 +150,8 @@ try:
                 b_id = basic.get("disclosureIndex")
                 if b_id and b_id not in gorulen_bildirimler:
                     baslik = basic.get("title", "")
-                    ozet = basic.get("summary", "")
                     temiz_baslik = tr_kucult(baslik)
-                    temiz_ozet = tr_kucult(ozet)
-                    if "devre kesici" in temiz_baslik or "devre kesici" in temiz_ozet:
+                    if "devre kesici" in temiz_baslik:
                         gorulen_bildirimler.add(b_id)
                         continue
                     yeni_gelenler.append((b_id, basic))
@@ -158,20 +159,30 @@ try:
 
             for b_id, basic in reversed(yeni_gelenler):
                 sirket = basic.get("companyTitle", "Bilinmiyor")
-                hisse = basic.get("stockCodes") or basic.get("relatedStocks") or "-"
+                
+                # Hisse kodunu sağlamlaştırma: Boş veya '-' ise şirket unvanına döner
+                hisse_raw = basic.get("stockCodes") or basic.get("relatedStocks") or ""
+                if isinstance(hisse_raw, list):
+                    hisse = ", ".join(hisse_raw)
+                else:
+                    hisse = str(hisse_raw).strip()
+                    
+                if not hisse or hisse == "-":
+                    hisse = sirket
+
                 baslik = basic.get("title", "Başlık Yok")
                 ozet = basic.get("summary") or "Özet Bilgi Bulunmuyor"
                 tarih = basic.get("publishDate", "Tarih Yok")
                 saat = tarih.split()[-1] if ' ' in tarih else tarih
                 link = f"https://www.kap.org.tr/tr/Bildirim/{b_id}"
                 
-                tur = bildirim_turu_belirle(baslik, ozet)
+                tur = bildirim_turu_belirle(baslik)
                 if tur == "YENI_IS":
                     print("\n" + "#" * 80)
                     print(f"💼 [YENİ İŞ İLİŞKİSİ BULUNDU] Saat: {saat} | Şirket: {hisse} - {sirket}")
                     print(f"🚀 Link analiz motoruna gönderildi: {link}")
                     print("#" * 80)
-                    hisse_temiz = hisse.split(",")[0].strip() if hisse != "-" else None
+                    hisse_temiz = hisse.split(",")[0].strip() if hisse != sirket else None
                     ilani_analiz_et(link, hisse_kodu=hisse_temiz)
 
                 elif tur == "IHALE":
@@ -210,7 +221,6 @@ except Exception as e:
     hata_detay = traceback.format_exc()
     print(f"\n❌ BEKLENMEDİK ÇÖKME:\n{hata_detay}")
     
-    # Telegram mesaj uzunluğu sınırına takılmamak için son kısmı alıyoruz
     hata_kisa = hata_detay[-800:] if len(hata_detay) > 800 else hata_detay
     mesaj = (
         f"🚨 <b>KAP NÖBETÇİSİ ÇÖKTÜ!</b>\n\n"
