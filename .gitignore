@@ -15,3 +15,4 @@ __pycache__/
 
 # IDE ayarları
 .vscode/
+tg_test.py
