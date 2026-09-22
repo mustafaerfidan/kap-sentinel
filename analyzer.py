@@ -64,30 +64,18 @@ def para_birimi_normalize_et(pb_str):
         return "GBP"
     return "TL"
 
-def metin_ici_carpan_kontrol(metin_kesiti):
-    kesit = metin_kesiti.lower()
-    if "milyar" in kesit:
-        return 1_000_000_000
-    elif "milyon" in kesit:
-        return 1_000_000
-    return 1
-
-def tutar_ve_para_birimi_bul(metin, soup=None):
-    metin_kucuk = tr_kucult(metin)
+# =====================================================================
+# 1. YENİ İŞ İLİŞKİSİ AYRIŞTIRICI (TARİH VE SAHTE YIL KORUMALI)
+# =====================================================================
+def yeni_is_tutari_bul(metin):
+    # Tarih kalıplarını (06/09/2026, 22.09.2026 vb.) metinden temizle (yıllar tutar sanılmasın)
+    metin_temiz = re.sub(r'\b\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4}\b', ' ', metin)
+    metin_temiz = re.sub(r'\b\d{4}[./\-]\d{1,2}[./\-]\d{1,2}\b', ' ', metin_temiz)
+    
+    metin_kucuk = tr_kucult(metin_temiz)
     pb_desen = r"(?:abd\s*dolar[ıi]|amerikan\s*dolar[ıi]|dolar|usd|\$|euro|avro|eur|€|t[üu]rk\s*liras[ıi]|tl|try|₺|ingiliz\s*sterlin[ıi]|sterlin|gbp|£)"
 
-    # 1. Öncelik: Tablo Hücrelerini Tara
-    if soup:
-        for tr in soup.find_all(["tr", "div"]):
-            satir_metin = tr_kucult(tr.get_text(separator=" ", strip=True))
-            if any(k in satir_metin for k in ["sozlesme bedeli", "sozlesme tutari", "isin tutari", "siparis tutari", "is iliskisi tutari", "yapilan isin"]):
-                bulunanlar = re.findall(rf"([\d\.,]{{3,}})\s*({pb_desen})?", satir_metin)
-                for rk, pb_ham in bulunanlar:
-                    val = sayiyi_ayristir(rk)
-                    if val and val > 1000:
-                        return val, para_birimi_normalize_et(pb_ham)
-
-    # 2. Öncelik: "Milyon / Milyar" yazılı kalıplar
+    # 1. Öncelik: "Milyon / Milyar" yazılı kalıplar (Örn: 50 Milyon TL)
     milyon_desen = rf"([\d\.,]+)\s*(milyon|milyar)\s*({pb_desen})?"
     m_eslesme = re.search(milyon_desen, metin_kucuk)
     if m_eslesme:
@@ -96,25 +84,33 @@ def tutar_ve_para_birimi_bul(metin, soup=None):
             carpan = 1_000_000_000 if m_eslesme.group(2) == "milyar" else 1_000_000
             return val * carpan, para_birimi_normalize_et(m_eslesme.group(3))
 
-    # 3. Öncelik: Bitişik anahtar kelime eşleşmeleri
-    p1 = rf"(?:toplam|tutar[ıi]?|bedel[i]?|deger[i]?|sozlesme|anlasma|siparis)\w*\s*[:\-]?\s*([\d\.,]{{3,}})\s*({pb_desen})"
-    p2 = rf"([\d\.,]{{3,}})\s*({pb_desen})\s*(?:tutar|bedel|deger|anlasma|sozlesme|siparis)\w*"
+    # 2. Öncelik: Doğrudan sözleşme anahtar kelimesiyle bağlı tutar ve para birimi
+    p1 = rf"(?:sozlesme\s+bedeli|is\s+tutari|siparis\s+tutari|toplam\s+bedel|sozlesme\s+tutari)\b.*?([\d\.,]{{3,}})\s*({pb_desen})"
+    m1 = re.search(p1, metin_kucuk)
+    if m1:
+        val = sayiyi_ayristir(m1.group(1))
+        pb = para_birimi_normalize_et(m1.group(2))
+        if val and not (1990 <= val <= 2050 and pb == "TL") and val > 1000:
+            return val, pb
 
-    for desen in [p1, p2]:
-        eslesmeler = re.findall(desen, metin_kucuk)
-        for ham_rakam, ham_pb in eslesmeler:
-            val = sayiyi_ayristir(ham_rakam)
-            if val and val > 1000:
-                return val, para_birimi_normalize_et(ham_pb)
-
-    # 4. Öncelik: Genel tutar araması
-    p3 = rf"([\d\.,]{{3,}})\s*({pb_desen})"
-    eslesmeler = re.findall(p3, metin_kucuk)
-    adaylar = []
-    for ham_rakam, ham_pb in eslesmeler:
+    # 3. Öncelik: Genel anahtar kelime eşleşmeleri
+    p2 = rf"(?:toplam|tutar[ıi]?|bedel[i]?|deger[i]?|sozlesme|anlasma|siparis)\w*\s*[:\-]?\s*([\d\.,]{{3,}})\s*({pb_desen})"
+    m2 = re.findall(p2, metin_kucuk)
+    for ham_rakam, ham_pb in m2:
         val = sayiyi_ayristir(ham_rakam)
-        if val and val > 1000:
-            adaylar.append((val, para_birimi_normalize_et(ham_pb)))
+        pb = para_birimi_normalize_et(ham_pb)
+        if val and not (1990 <= val <= 2050 and pb == "TL") and val > 1000:
+            return val, pb
+
+    # 4. Öncelik: Yanında açıkça para birimi olan rakamlar
+    p3 = rf"([\d\.,]{{3,}})\s*({pb_desen})"
+    m3 = re.findall(p3, metin_kucuk)
+    adaylar = []
+    for ham_rakam, ham_pb in m3:
+        val = sayiyi_ayristir(ham_rakam)
+        pb = para_birimi_normalize_et(ham_pb)
+        if val and not (1990 <= val <= 2050 and pb == "TL") and val > 1000:
+            adaylar.append((val, pb))
 
     if adaylar:
         adaylar.sort(key=lambda x: x[0], reverse=True)
@@ -122,47 +118,54 @@ def tutar_ve_para_birimi_bul(metin, soup=None):
 
     return None, "TL"
 
-def ihale_bedeli_bul(metin, soup=None):
-    metin_kucuk = tr_kucult(metin)
+# =====================================================================
+# 2. İHALE SONUCU AYRIŞTIRICI (İNGİLİZCE TAKSONOMİ VE ESNEK ARAMA)
+# =====================================================================
+def ihale_bedeli_bul(tam_metin):
+    metin_kucuk = tr_kucult(tam_metin)
     pb_desen = r"(?:abd\s*dolar[ıi]|amerikan\s*dolar[ıi]|dolar|usd|\$|euro|avro|eur|€|t[üu]rk\s*liras[ıi]|tl|try|₺)"
 
-    # 1. Öncelik: Tablo Hücrelerini Tara
-    if soup:
-        for tr in soup.find_all(["tr", "div"]):
-            satir_metin = tr_kucult(tr.get_text(separator=" ", strip=True))
-            if "ihale bedeli" in satir_metin and "ortaklik" not in satir_metin:
-                bulunanlar = re.findall(rf"([\d\.,]{{3,}})\s*({pb_desen})?", satir_metin)
-                for rk, pb_ham in bulunanlar:
-                    val = sayiyi_ayristir(rk)
-                    if val and val > 1000:
-                        return val, para_birimi_normalize_et(pb_ham)
-
-    # 2. Öncelik: Esnek Regex
-    p1 = rf"ihale\s+bedeli\b(?:(?!\bortakl[ıi]k\b).){{0,70}}?([\d\.,]{{3,}})\s*({pb_desen})?"
-    eslesme = re.search(p1, metin_kucuk, re.DOTALL)
-    if eslesme:
-        val = sayiyi_ayristir(eslesme.group(1))
+    # 1. Öncelik: "İhale Bedeli" (Araya Tender Value, taksonomi, boşluk, KDV hariç girse de 0-60 karakter toleransla yakalar)
+    p1 = rf"ihale\s+bedeli(?!\s*(?:nden)?\s*ortakl[ıi]k)\b.{{0,60}}?([\d\.,]{{3,}})\s*({pb_desen})?"
+    m1 = re.search(p1, metin_kucuk, re.DOTALL)
+    if m1:
+        val = sayiyi_ayristir(m1.group(1))
+        pb = para_birimi_normalize_et(m1.group(2))
         if val and val > 1000:
-            return val, para_birimi_normalize_et(eslesme.group(2))
+            return val, pb
 
-    # 3. Öncelik: Ortaklık Payı Satırı
-    p2 = rf"ortakl[ıi]k\s+pay[ıi]na\s+d[üu]sen\s+k[ıi]s[ıi]m\b.{{0,70}}?([\d\.,]{{3,}})\s*({pb_desen})?"
-    eslesme2 = re.search(p2, metin_kucuk, re.DOTALL)
-    if eslesme2:
-        val = sayiyi_ayristir(eslesme2.group(1))
+    # 2. Öncelik: "İhale Bedelinden Ortaklık Payına Düşen Kısım"
+    p2 = rf"ortakl[ıi]k\s+pay[ıi]na\s+d[üu]sen\s+(?:k[ıi]s[ıi]m|tutar|bedel)\b.{{0,60}}?([\d\.,]{{3,}})\s*({pb_desen})?"
+    m2 = re.search(p2, metin_kucuk, re.DOTALL)
+    if m2:
+        val = sayiyi_ayristir(m2.group(1))
+        pb = para_birimi_normalize_et(m2.group(2))
         if val and val > 1000:
-            return val, para_birimi_normalize_et(eslesme2.group(2))
+            return val, pb
 
-    # 4. Öncelik: Açıklama Cümlesi (+ KDV / uhdesinde)
-    p3 = rf"([\d\.,]{{3,}})\s*({pb_desen})?\s*(?:\+\s*kdv)?\s*(?:tutar|bedel|uhdesinde|kazan)"
-    eslesme3 = re.search(p3, metin_kucuk)
-    if eslesme3:
-        val = sayiyi_ayristir(eslesme3.group(1))
+    # 3. Öncelik: Açıklamalardaki baz bedel / ihale bedeli cümleleri
+    p3 = rf"(?:baz\s+bedel[i]?|ihale\s+bedeli\s+kdv\s+(?:haric|dahil))\s*[:\-]?\s*([\d\.,]{{3,}})\s*({pb_desen})?"
+    m3 = re.search(p3, metin_kucuk)
+    if m3:
+        val = sayiyi_ayristir(m3.group(1))
+        pb = para_birimi_normalize_et(m3.group(2))
         if val and val > 1000:
-            return val, para_birimi_normalize_et(eslesme3.group(2))
+            return val, pb
+
+    # 4. Öncelik: Açıklamadaki "+ KDV ... uhdesinde / kazanıldı" kalıbı
+    p4 = rf"([\d\.,]{{3,}})\s*({pb_desen})?\s*(?:\+\s*kdv)?\s*(?:tutarla|bedelle|uhdesinde|kazan)"
+    m4 = re.search(p4, metin_kucuk)
+    if m4:
+        val = sayiyi_ayristir(m4.group(1))
+        pb = para_birimi_normalize_et(m4.group(2))
+        if val and val > 1000:
+            return val, pb
 
     return None, "TL"
 
+# =====================================================================
+# 3. YARDIMCI FİNANS VE ENTEGRASYON MODÜLLERİ
+# =====================================================================
 def canli_kur_al(para_birimi):
     pb = para_birimi.upper().strip()
     if pb in ["TL", "TRY"]:
@@ -178,13 +181,12 @@ def canli_kur_al(para_birimi):
     return varsayilanlar.get(pb, 1.0)
 
 def ozsermaye_al(hisse_kodu):
-    # Eğer gelen değer borsa kodu değil uzun şirket unvanıysa yfinance'e gönderme
     if not hisse_kodu or len(hisse_kodu) > 10 or " " in hisse_kodu:
         return None
     try:
         sembol = f"{hisse_kodu.upper().strip()}.IS"
         t = yf.Ticker(sembol)
-        # Önce en güncel çeyreklik bilançoya bakılır, yoksa yıllığa dönülür
+        # Önce en güncel çeyreklik bilanço taranır
         bilanco = t.quarterly_balance_sheet
         if bilanco is None or bilanco.empty:
             bilanco = t.balance_sheet
@@ -225,6 +227,9 @@ def baslik_formatla(hisse_kodu, sirket_unvani=None):
         return html.escape(sirket_unvani)
     return "Bilinmiyor"
 
+# =====================================================================
+# 4. ANA ÇALIŞTIRICI FONKSİYONLAR
+# =====================================================================
 def ilani_analiz_et(link, hisse_kodu=None, sirket_unvani=None):
     try:
         r = requests.get(link, headers=headers, timeout=10)
@@ -239,7 +244,7 @@ def ilani_analiz_et(link, hisse_kodu=None, sirket_unvani=None):
             hisse_kodu = kod_kutusu.get_text(strip=True).upper()
 
     tam_metin = soup.get_text(separator=" ", strip=True)
-    ham_tutar, pb = tutar_ve_para_birimi_bul(tam_metin, soup=soup)
+    ham_tutar, pb = yeni_is_tutari_bul(tam_metin)
     
     tutar_tl = None
     if ham_tutar:
@@ -251,7 +256,6 @@ def ilani_analiz_et(link, hisse_kodu=None, sirket_unvani=None):
 
     etiket = baslik_formatla(hisse_kodu, sirket_unvani)
 
-    # Terminal Kartı
     print("\n" + "=" * 60)
     print(f"💼 [YENİ İŞ İLİŞKİSİ ANALİZ KARTI]")
     print(f"🏢 Şirket     : {hisse_kodu or sirket_unvani or 'Bilinmiyor'}")
@@ -267,7 +271,6 @@ def ilani_analiz_et(link, hisse_kodu=None, sirket_unvani=None):
     print(f"🔗 Link       : {link}")
     print("=" * 60 + "\n")
 
-    # Telegram Mesajı
     tg_mesaj = f"💼 <b>YENİ İŞ İLİŞKİSİ BİLDİRİMİ</b>\n\n"
     tg_mesaj += f"🏢 <b>Şirket:</b> {etiket}\n"
     
@@ -301,7 +304,7 @@ def ihale_analiz_et(link, hisse_kodu=None, sirket_unvani=None):
             hisse_kodu = kod_kutusu.get_text(strip=True).upper()
 
     tam_metin = soup.get_text(separator=" ", strip=True)
-    ham_tutar, pb = ihale_bedeli_bul(tam_metin, soup=soup)
+    ham_tutar, pb = ihale_bedeli_bul(tam_metin)
 
     tutar_tl = None
     if ham_tutar:
@@ -313,7 +316,6 @@ def ihale_analiz_et(link, hisse_kodu=None, sirket_unvani=None):
 
     etiket = baslik_formatla(hisse_kodu, sirket_unvani)
 
-    # Terminal Kartı
     print("\n" + "=" * 60)
     print(f"🏆 [İHALE SONUCU ANALİZ KARTI]")
     print(f"🏢 Şirket     : {hisse_kodu or sirket_unvani or 'Bilinmiyor'}")
@@ -329,7 +331,6 @@ def ihale_analiz_et(link, hisse_kodu=None, sirket_unvani=None):
     print(f"🔗 Link       : {link}")
     print("=" * 60 + "\n")
 
-    # Telegram Mesajı
     tg_mesaj = f"🏆 <b>İHALE SONUCU BİLDİRİMİ</b>\n\n"
     tg_mesaj += f"🏢 <b>Şirket:</b> {etiket}\n"
 
@@ -346,7 +347,7 @@ def ihale_analiz_et(link, hisse_kodu=None, sirket_unvani=None):
         tg_mesaj += f"💰 <b>İhale Bedeli:</b> <i>Yayınlanmamış</i>\n"
         if ozsermaye:
             tg_mesaj += f"🏛️ <b>Öz Sermaye:</b> {ozsermaye:,.2f} TL\n"
-        tg_mesaj += f"\nℹ️ <i>Not: İhale bedeli şirket tarafından KAP ilanında yayınlanmamıştır.</i>\n"
+        tg_mesaj += f"\nℹ️ <i>Not: İhale bedeli şirket tarafından KAP tablosunda yayınlanmamıştır.</i>\n"
 
     tg_mesaj += f"\n🔗 <a href='{link}'>KAP İlanını Görüntüle</a>"
     telegram_bildirim_gonder(tg_mesaj)
